@@ -18,7 +18,7 @@ library(skimr)
 library(glmnet)
 library(ggplot2)
 
-cs_training <- read_csv("~/Desktop/Senior Year/CompStats/Chandler/DataProject/cs-training.csv")
+cs_training <- read_csv("~/Desktop/CompStats/cs-training.csv")
 
 #### Data Preparation ####
 #remove first column
