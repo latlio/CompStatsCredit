@@ -149,20 +149,22 @@ Maybe write a brief description of what the code did.
 In class, we learned how adding basis functions could improve the way we understand our data: namely finding our decision rules in higher dimensions. Thus, feature engineering is a crucial part of the machine learning process. By transforming our data into features that we think better represent the underlying problem for our machine learning models, we hope to improve predictive performance. We tried to use our domain knowledge about credit scores and our creativity to come up with new features. We ultimately came up with 14 new features in addition to the existing 10 explanatory ones in the data set. 
 
 ```{r}
+cs_training_clean <- read_csv("cs_training_clean.csv")
+
 #add features
-cs_training <- cs_training %>%
-  mutate(Distributedincome = MonthlyIncome/(1+NumberOfDependents)-1,
+cs_training_clean <- cs_training_clean %>%
+  mutate(Distributedincome = MonthlyIncome/(1+NumberOfDependents),
          Totalcost = DebtRatio * MonthlyIncome,
          Retired = ifelse(age > 65, 1, 0),
          Lateindex = `NumberOfTime30-59DaysPastDueNotWorse` + 2*`NumberOfTime60-89DaysPastDueNotWorse` + 3*NumberOfTimes90DaysLate,
          Numedepencubed = NumberOfDependents^3,
-         LogRUUL = ifelse(RevolvingUtilizationOfUnsecuredLines == 0, 0, log(RevolvingUtilizationOfUnsecuredLines)),
-         LogMI = ifelse(MonthlyIncome == 0, 0, log(MonthlyIncome)),
+         LogRUUL = log(RevolvingUtilizationOfUnsecuredLines+1),
+         LogMI = log(MonthlyIncome+1),
          LoansAge = (NumberOfOpenCreditLinesAndLoans + NumberRealEstateLoansOrLines)/age,
          DepAge = NumberOfDependents/age,
          LoansIncome = NumberOfOpenCreditLinesAndLoans + NumberRealEstateLoansOrLines,
-         RUULIncome = log(RevolvingUtilizationOfUnsecuredLines/MonthlyIncome), #Housing Insolvency paper
-         HousingExpenses = log(NumberRealEstateLoansOrLines/MonthlyIncome),
+         RUULIncome = log(RevolvingUtilizationOfUnsecuredLines/(MonthlyIncome+1)+1), #Housing Insolvency paper
+         HousingExpenses = log(NumberRealEstateLoansOrLines/(MonthlyIncome+1)),
          AgeCubed = age^3,
          LogAge = log(age)
 )
@@ -170,14 +172,18 @@ cs_training <- cs_training %>%
 
 ```{r}
 #Test features
-cs_zero <- cs_training[cs_training$SeriousDlqin2yrs == 0,]
-cs_one <- cs_training[cs_training$SeriousDlqin2yrs == 1,]
+cs_zero <- cs_training_clean[cs_training_clean$SeriousDlqin2yrs == 0,]
+cs_one <- cs_training_clean[cs_training_clean$SeriousDlqin2yrs == 1,]
 hist(log(cs_zero$RevolvingUtilizationOfUnsecuredLines/(cs_zero$MonthlyIncome)), freq=FALSE)
 hist(log(cs_zero$RevolvingUtilizationOfUnsecuredLines/(cs_zero$MonthlyIncome)), freq=FALSE)
 
-summary(cs_training$HousingExpenses)
+summary(cs_training_clean$HousingExpenses)
 
-ggplot(cs_training, aes(LogAge, fill = as.factor(SeriousDlqin2yrs))) + geom_density(alpha = 0.2)
+par(mfrow = c(1,2))
+ggplot(cs_training, aes(LogRUUL, fill = as.factor(SeriousDlqin2yrs))) + geom_density(alpha = 0.2)+ xlim(0,1)
+ggplot(cs_training, aes(age, fill = as.factor(SeriousDlqin2yrs))) + geom_density(alpha = 0.2)
+ggplot(cs_training_clean, aes(RevolvingUtilizationOfUnsecuredLines, fill = as.factor(SeriousDlqin2yrs))) + geom_density(alpha = 0.2)
+ggplot(cs_training_clean, aes(RUULIncome, fill = as.factor(SeriousDlqin2yrs))) + geom_density(alpha = 0.2)
 ```
 
 ## Section 4: Feature Selection
@@ -186,5 +192,10 @@ ggplot(cs_training, aes(LogAge, fill = as.factor(SeriousDlqin2yrs))) + geom_dens
 xmat <- as.matrix(cs_training[,-1])
 lassovar <- glmnet(xmat, y=as.factor(cs_training$SeriousDlqin2yrs), alpha=1, family="binomial")
 coef(lassovar)[, 10]
+```
+
+```{r}
+library("xgboost")
+?xgboost
 ```
 
