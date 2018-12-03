@@ -6,7 +6,7 @@ output: pdf_document
 ---
 
 ```{r setup, include=FALSE message = FALSE}
-## Section 0: Environment Setup
+#### Section 0: Environment Setup ####
 
 knitr::opts_chunk$set(echo = TRUE)
 #### Libraries ####
@@ -22,18 +22,17 @@ library(scales)
 library(DescTools)
 library(randomForest)
 library(pROC)
-library(data.table)
 library(xgboost)
+library(UpSetR)
 
+#### load training data ####
+trainpath <- "/Users/lathanliou/Desktop/Senior\ Year/CompStats/Chandler/DataProject/cs-training.csv"
+cs_training <- read_csv(trainpath)
 
-cs_training <- read_csv("C:/Users/Shivang Mehta/Desktop/Work/Fall 18/Computational Statistics/Project/Data/cs-training.xlsx")
-
-#remove first column
-cs_training <- cs_training[,-1]
-
-#making all columns numeric
+#convert to dataframe
 cs_training <- as.data.frame(cs_training)
 ```
+
 \par 
 Banks play a crucial role in market economies. They decide who can get finance and on what terms and can make or break investment decisions. For markets and society to function, individuals and companies need access to credit. 
 \par 
@@ -41,14 +40,14 @@ Credit scoring algorithms, which make a guess at the probability of default, are
 \par 
 We begin by exploring the data provided to us:
 \par 
-```{r}
-## Section 1: Data Exploration
 
-# Dependent variable 
+# Section 1: Data Exploration 
+
+```{r}
+# Plot dependent variable 
 ggplot(cs_training, aes(SeriousDlqin2yrs)) + geom_bar(aes(y= (..count..)/sum(..count..)), fill = "steelblue", color ="steelblue") + ylab("Percent")
 
-# Independent Variables
-
+# Plot independent Variables
 a1 <- ggplot(cs_training, aes(RevolvingUtilizationOfUnsecuredLines)) + geom_bar(aes(y= (..count..)/sum(..count..)), fill = "steelblue", color ="steelblue") + ylab("Percent")
 a2 <- ggplot(cs_training, aes(age)) + geom_bar(fill = "steelblue", color ="steelblue")
 a3 <- ggplot(cs_training, aes(`NumberOfTime30-59DaysPastDueNotWorse`)) + geom_bar(aes(y= (..count..)/sum(..count..)), fill = "steelblue", color ="steelblue") + ylab("Percent")
@@ -63,20 +62,15 @@ a9 <- ggplot(cs_training, aes(NumberOfDependents)) + geom_bar(aes(y= (..count..)
 a10 <- ggplot(cs_training, aes(`NumberOfTime60-89DaysPastDueNotWorse`)) + geom_bar(aes(y= (..count..)/sum(..count..)), fill = "steelblue", color ="steelblue") + ylab("Percent")
 ```
 
-
-
-
+# Section 2: Data Imputation
 ```{r}
-## Section 2: Data Imputation
-
-#EDA
-md.pattern(cs_training)
-aggr_plot <- aggr(cs_training, col=c('dodgerblue','black'), numbers=TRUE, sortVars=TRUE, labels=names(cs_training), cex.axis=.4, gap=0.5, ylab=c("Histogram of missing data","Pattern"))
+#EDA to find which variables have missing values
+gg_miss_upset(cs_training)
 ```
 
 NOTE ON USE OF MEDIAN FOR IMPUTATION AND REGRESSION.
 
-# Imputing NumberOfDependents as median
+## Imputing NumberOfDependents as median
 
 ```{r}
 median.numdep <- median(cs_training$NumberOfDependents, na.rm = TRUE)
@@ -87,18 +81,15 @@ for(i in 1:length(cs_training$NumberOfDependents)){
 }
 ```
 
-# Imputing MonthlyIncome
+## Imputing MonthlyIncome
 
 ```{r}
 train1 <- cs_training
 train1 <- train1 %>% drop_na()
 train.y <- train1$MonthlyIncome
 train1 <- subset(train1, select = -c(MonthlyIncome, SeriousDlqin2yrs))
-```
 
-# Regression
-
-```{r}
+#regression to impute monthly income
 fit <- lm(train.y ~., data=train1)
 pred.miss <- fit$coefficients[1] + fit$coefficients[2]*cs_training$RevolvingUtilizationOfUnsecuredLines + fit$coefficients[3]*cs_training$age +
               fit$coefficients[4]*cs_training$`NumberOfTime30-59DaysPastDueNotWorse` + fit$coefficients[5]*cs_training$DebtRatio +
@@ -113,7 +104,7 @@ for(i in 1:length(cs_training$MonthlyIncome)){
 
 ```
 
-## Section 3: Outlier Treatment
+# Section 3: Outlier Treatment
 
 SHORT NOTE ON WINSORIZATION
 
@@ -122,9 +113,8 @@ SHORT NOTE ON WINSORIZATION
 cs_training_winsorized <- sapply(cs_training, Winsorize, minval = NULL)
 cs_training_winsorized <- as.data.frame(cs_training_winsorized)
 ```
-Maybe write a brief description of what the code did.
 
-## Section 4: Feature Engineering
+# Section 4: Feature Engineering
 
 In class, we learned how adding basis functions could improve the way we understand our data: namely finding our decision rules in higher dimensions. Thus, feature engineering is a crucial part of the machine learning process. By transforming our data into features that we think better represent the underlying problem for our machine learning models, we hope to improve predictive performance. We tried to use our domain knowledge about credit scores and our creativity to come up with new features. We ultimately came up with 14 new features in addition to the existing 10 explanatory ones in the data set. 
 
@@ -149,26 +139,22 @@ cs_training_winsorized <- cs_training_winsorized %>%
 
 write_csv(cs_training_winsorized, "cs_training_clean.csv")
 cs_training_clean <- read_csv("cs_training_clean.csv")
-
-
 ```
 
 ```{r}
 ggplot(cs_training_clean, aes(LogAge, fill = as.factor(SeriousDlqin2yrs))) + geom_density(alpha = 0.2)
 ```
 
-## Section 5: Feature Selection
+# Section 5: Feature Selection
 
 ```{r}
 #xmat <- as.matrix(cs_training_clean[,-1])
 #lassovar <- cv.glmnet(xmat, y=as.factor(cs_training_clean$SeriousDlqin2yrs), alpha = 0.5, lambda = seq(0.00051,0.00058,length.out=7),family="binomial")
-
 ```
 
-## Section 6: Loading Test Data 
+# Section 6: Loading Test Data 
 
 ```{r}
-
 cs_test <- cs_test[,-1]
 cs_test <- cs_test[,-1]
 
@@ -184,7 +170,6 @@ train1 <- cs_test
 train1 <- train1 %>% drop_na()
 train.y <- train1$MonthlyIncome
 train1 <- subset(train1, select = -c(MonthlyIncome))
-
 
 fit <- lm(train.y ~., data=train1)
 pred.miss <- fit$coefficients[1] + fit$coefficients[2]*cs_test$RevolvingUtilizationOfUnsecuredLines + fit$coefficients[3]*cs_test$age +
@@ -221,11 +206,11 @@ cs_test_winsorized <- cs_test_winsorized %>%
 )
 
 write_csv(cs_test_winsorized, "cs_test_clean.csv")
-
 ```
 
-## Section 7: Predictive Algorithm
+# Section 7: Building our Predictive Algorithm
 
+## Trying a Random Forest
 ```{r}
 cs_test_clean <- read_csv("cs_test_clean.csv")
 cs_training_clean <- read_csv("cs_training_clean.csv")
@@ -239,7 +224,18 @@ y.test <- output.forest$test
 ```
 
 ```{r}
-#### xgboost ####
+submissions <- output.forest$test$votes[,2]
+submissions <- as.data.frame(submission)
+id <- seq(1,nrow(submission), by = 1)
+submissions <- cbind(id, submissions)
+colnames(submissions) <- c("id", "Probability")
+write.csv(submissions, "submissions.csv")
+```
+
+## Trying xgboost
+
+```{r}
+#xgboost
 
 #convert data frame to matrix
 cs_xgboost <- cs_training_clean[,-1]
@@ -258,20 +254,9 @@ id <- seq(1,nrow(submission.xgboost), by = 1)
 submission.xgboost <- cbind(as.integer(id), submission.xgboost)
 colnames(submission.xgboost) <- c("id", "Probability")
 write.csv(submission.xgboost, "submission.xgboost.csv")
-
 ```
 
-## Section 8: Output file
-```{r}
-submissions <- output.forest$test$votes[,2]
-submissions <- as.data.frame(submission)
-id <- seq(1,nrow(submission), by = 1)
-submissions <- cbind(id, submissions)
-colnames(submissions) <- c("id", "Probability")
-write.csv(submissions, "submissions.csv")
-```
-
-## Section 9: Trying xgboost's imputation method
+## Trying xgboost's imputation method
 ```{r}
 #prepare training data
 cs_training_a <- sapply(cs_training, Winsorize, minval = NULL, na.rm = TRUE)
