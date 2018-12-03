@@ -14,6 +14,7 @@ library(readxl)
 library(tidyr)
 library(VIM)
 library(readr)
+library(skimr)
 library(dplyr)
 library(glmnet)
 library(ggplot2)
@@ -23,14 +24,19 @@ library(DescTools)
 library(randomForest)
 library(pROC)
 library(xgboost)
-library(UpSetR)
+library(naniar)
+library(Ckmeans.1d.dp)
 
 #### load training data ####
 trainpath <- "/Users/lathanliou/Desktop/Senior\ Year/CompStats/Chandler/DataProject/cs-training.csv"
 cs_training <- read_csv(trainpath)
 
+testpath <- "/Users/lathanliou/Desktop/Senior\ Year/CompStats/Chandler/DataProject/cs-test.csv"
+cs_test <- read_csv(testpath)
+
 #convert to dataframe
 cs_training <- as.data.frame(cs_training)
+cs_test <- as.data.frame(cs_test)
 ```
 
 \par 
@@ -65,7 +71,7 @@ a10 <- ggplot(cs_training, aes(`NumberOfTime60-89DaysPastDueNotWorse`)) + geom_b
 # Section 2: Data Imputation
 ```{r}
 #EDA to find which variables have missing values
-gg_miss_upset(cs_training)
+missingplot <- gg_miss_upset(cs_training)
 ```
 
 NOTE ON USE OF MEDIAN FOR IMPUTATION AND REGRESSION.
@@ -90,7 +96,7 @@ train.y <- train1$MonthlyIncome
 train1 <- subset(train1, select = -c(MonthlyIncome, SeriousDlqin2yrs))
 
 #regression to impute monthly income
-fit <- lm(train.y ~., data=train1)
+fit <- lm(train.y ~., data=train1[,-1])
 pred.miss <- fit$coefficients[1] + fit$coefficients[2]*cs_training$RevolvingUtilizationOfUnsecuredLines + fit$coefficients[3]*cs_training$age +
               fit$coefficients[4]*cs_training$`NumberOfTime30-59DaysPastDueNotWorse` + fit$coefficients[5]*cs_training$DebtRatio +
               fit$coefficients[6]*cs_training$NumberOfOpenCreditLinesAndLoans + fit$coefficients[7]*cs_training$NumberOfTimes90DaysLate +
@@ -101,7 +107,6 @@ for(i in 1:length(cs_training$MonthlyIncome)){
     cs_training$MonthlyIncome[i] = pred.miss[i]
   }
 }
-
 ```
 
 # Section 3: Outlier Treatment
@@ -110,7 +115,7 @@ SHORT NOTE ON WINSORIZATION
 
 ```{r}
 ## Winsorize Data 
-cs_training_winsorized <- sapply(cs_training, Winsorize, minval = NULL)
+cs_training_winsorized <- cbind(cs_training[,c(1:2)], sapply(cs_training[,c(3:12)], Winsorize, minval = NULL)) #don't winsorize id and Dlq
 cs_training_winsorized <- as.data.frame(cs_training_winsorized)
 ```
 
@@ -138,6 +143,8 @@ cs_training_winsorized <- cs_training_winsorized %>%
 )
 
 write_csv(cs_training_winsorized, "cs_training_clean.csv")
+
+#load back cleaned data into environment
 cs_training_clean <- read_csv("cs_training_clean.csv")
 ```
 
@@ -155,9 +162,6 @@ ggplot(cs_training_clean, aes(LogAge, fill = as.factor(SeriousDlqin2yrs))) + geo
 # Section 6: Loading Test Data 
 
 ```{r}
-cs_test <- cs_test[,-1]
-cs_test <- cs_test[,-1]
-
 # Imputation
 median.numdep <- median(cs_test$NumberOfDependents, na.rm = TRUE)
 for(i in 1:length(cs_test$NumberOfDependents)){
@@ -166,12 +170,12 @@ for(i in 1:length(cs_test$NumberOfDependents)){
   }
 }
 
-train1 <- cs_test
-train1 <- train1 %>% drop_na()
-train.y <- train1$MonthlyIncome
-train1 <- subset(train1, select = -c(MonthlyIncome))
+test1 <- cs_test
+#test1 <- test1 %>% drop_na()
+test.y <- test1$MonthlyIncome
+test1 <- subset(test1, select = -c(MonthlyIncome, SeriousDlqin2yrs))
 
-fit <- lm(train.y ~., data=train1)
+fit <- lm(test.y ~., data=test1[,-1])
 pred.miss <- fit$coefficients[1] + fit$coefficients[2]*cs_test$RevolvingUtilizationOfUnsecuredLines + fit$coefficients[3]*cs_test$age +
               fit$coefficients[4]*cs_test$`NumberOfTime30-59DaysPastDueNotWorse` + fit$coefficients[5]*cs_test$DebtRatio +
               fit$coefficients[6]*cs_test$NumberOfOpenCreditLinesAndLoans + fit$coefficients[7]*cs_test$NumberOfTimes90DaysLate +
@@ -184,7 +188,7 @@ for(i in 1:length(cs_test$MonthlyIncome)){
 }
 
 # Winsorization
-cs_test_winsorized <- sapply(cs_test, Winsorize, minval = NULL)
+cs_test_winsorized <- cbind(cs_test[,c(1:2)], sapply(cs_test[3:12], Winsorize, minval = NULL)) #don't winsorize id and Dlq
 cs_test_winsorized <- as.data.frame(cs_test_winsorized)
 
 # Feature Engineering 
@@ -206,17 +210,16 @@ cs_test_winsorized <- cs_test_winsorized %>%
 )
 
 write_csv(cs_test_winsorized, "cs_test_clean.csv")
+
+#load back test data
+cs_test_clean <- read_csv("cs_test_clean.csv")
 ```
 
 # Section 7: Building our Predictive Algorithm
 
 ## Trying a Random Forest
 ```{r}
-cs_test_clean <- read_csv("cs_test_clean.csv")
-cs_training_clean <- read_csv("cs_training_clean.csv")
-
 ## Random Forest
-
 output.forest<- randomForest(as.factor(cs_training_clean$SeriousDlqin2yrs) ~ cs_training_clean$RevolvingUtilizationOfUnsecuredLines+ cs_training_clean$age+ cs_training_clean$`NumberOfTime30-59DaysPastDueNotWorse`+ cs_training_clean$DebtRatio + cs_training_clean$MonthlyIncome + cs_training_clean$NumberOfOpenCreditLinesAndLoans + cs_training_clean$NumberOfTimes90DaysLate + cs_training_clean$NumberRealEstateLoansOrLines + cs_training_clean$`NumberOfTime60-89DaysPastDueNotWorse` + cs_training_clean$NumberOfDependents + cs_training_clean$Distributedincome + cs_training_clean$Totalcost + cs_training_clean$Retired + cs_training_clean$Lateindex + cs_training_clean$Numedepencubed + cs_training_clean$LogRUUL + cs_training_clean$LogMI + cs_training_clean$LoansAge +cs_training_clean$DepAge + cs_training_clean$LoansIncome + cs_training_clean$RUULIncome + cs_training_clean$HousingExpenses + cs_training_clean$AgeCubed + cs_training_clean$LogAge , 
                              data=cs_training_clean, ntree=100, importance=T, replace=T, xtest = cs_test_winsorized)
 
@@ -238,22 +241,32 @@ write.csv(submissions, "submissions.csv")
 #xgboost
 
 #convert data frame to matrix
-cs_xgboost <- cs_training_clean[,-1]
+cs_xgboost <- cs_training_clean[,-c(1:2)]
 cs_xgboost <- as.matrix(cs_xgboost)
 
-cs_test_clean <- as.matrix(cs_test_clean)
-
-creditboost <- xgboost(data = cs_xgboost, max.depth = 5, label = as.matrix(cs_training_clean[,1]),
+#run xgboost model
+creditboost <- xgboost(data = cs_xgboost, max.depth = 5, label = as.matrix(cs_training_clean[,2]),
                eta = 0.1, nthread = 2, nround = 2, objective = "binary:logistic")
 
-pred <- predict(creditboost, cs_test_clean)
+#prepare test data
+mat_test <- as.matrix(cs_test_clean)
 
+#run prediction
+pred <- predict(creditboost, mat_test)
+
+#prepare Kaggle submission
 submission.xgboost <- pred
 submission.xgboost <- as.data.frame(submission.xgboost)
 id <- seq(1,nrow(submission.xgboost), by = 1)
 submission.xgboost <- cbind(as.integer(id), submission.xgboost)
 colnames(submission.xgboost) <- c("id", "Probability")
 write.csv(submission.xgboost, "submission.xgboost.csv")
+```
+
+```{r}
+#visualizing most important features
+importance_mat <- xgb.importance(feature_names = colnames(cs_xgboost),model = creditboost)
+xgb.ggplot.importance (importance_matrix = importance_mat, xlab = "Relative Importance") + ggtitle("Most Important Explanatory Variables")
 ```
 
 ## Trying xgboost's imputation method
