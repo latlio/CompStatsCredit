@@ -1,0 +1,276 @@
+---
+title: "Give Me Some Credit"
+author: "Lathan Liou, Shivang Mehta, Isaac Cui, Abby Lewis"
+date: "December 5, 2018"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+header-includes: \usepackage{graphicx}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy.opts=list(width.cutoff=60), tidy=TRUE)
+```
+
+```{r, include = FALSE, echo = FALSE, message = FALSE}
+#### Section 0: Environment Setup ####
+
+#### Libraries ####
+library(readxl)
+library(tidyr)
+library(VIM)
+library(readr)
+library(skimr)
+library(dplyr)
+library(glmnet)
+library(ggplot2)
+library(mice)
+library(scales)
+library(DescTools)
+library(randomForest)
+library(pROC)
+library(xgboost)
+library(naniar)
+library(Ckmeans.1d.dp)
+
+#### load training data ####
+trainpath <- "/Users/lathanliou/Desktop/Senior\ Year/CompStats/Chandler/DataProject/cs-training.csv"
+cs_training <- read_csv(trainpath)
+
+testpath <- "/Users/lathanliou/Desktop/Senior\ Year/CompStats/Chandler/DataProject/cs-test.csv"
+cs_test <- read_csv(testpath)
+
+#convert to dataframe
+cs_training <- as.data.frame(cs_training)
+cs_test <- as.data.frame(cs_test)
+
+# Imputation
+median.numdep <- median(cs_test$NumberOfDependents, na.rm = TRUE)
+for(i in 1:length(cs_test$NumberOfDependents)){
+  if(is.na(cs_test$NumberOfDependents[i])){
+    cs_test$NumberOfDependents[i] = median.numdep
+  }
+}
+
+test1 <- cs_test
+#test1 <- test1 %>% drop_na()
+test.y <- test1$MonthlyIncome
+test1 <- subset(test1, select = -c(MonthlyIncome, SeriousDlqin2yrs))
+
+fit <- lm(test.y ~., data=test1[,-1])
+pred.miss <- fit$coefficients[1] + fit$coefficients[2]*cs_test$RevolvingUtilizationOfUnsecuredLines + fit$coefficients[3]*cs_test$age +
+              fit$coefficients[4]*cs_test$`NumberOfTime30-59DaysPastDueNotWorse` + fit$coefficients[5]*cs_test$DebtRatio +
+              fit$coefficients[6]*cs_test$NumberOfOpenCreditLinesAndLoans + fit$coefficients[7]*cs_test$NumberOfTimes90DaysLate +
+              fit$coefficients[8]*cs_test$NumberOfOpenCreditLinesAndLoans + fit$coefficients[9]*cs_test$`NumberOfTime60-89DaysPastDueNotWorse` +
+              fit$coefficients[10]*cs_test$NumberOfDependents
+
+median.MI <- median(cs_test$MonthlyIncome, na.rm = TRUE)
+
+for(i in 1:length(cs_test$MonthlyIncome)){
+  if(is.na(cs_test$MonthlyIncome[i])){
+    cs_test$MonthlyIncome[i] = pred.miss[i]
+  }
+    if(cs_test$MonthlyIncome[i] < 0){
+    cs_test$MonthlyIncome[i] <- median.MI
+    }
+}
+
+# Winsorization
+cs_test_winsorized <- cbind(cs_test[,c(1:2)], sapply(cs_test[3:12], Winsorize, minval = NULL)) #don't winsorize id and Dlq
+cs_test_winsorized <- as.data.frame(cs_test_winsorized)
+
+# Feature Engineering 
+cs_test_winsorized <- cs_test_winsorized %>%
+  mutate(Distributedincome = MonthlyIncome/(1+NumberOfDependents),
+         Totalcost = DebtRatio * MonthlyIncome,
+         Retired = ifelse(age > 65, 1, 0),
+         Lateindex = `NumberOfTime30-59DaysPastDueNotWorse` + 2*`NumberOfTime60-89DaysPastDueNotWorse` + 3*NumberOfTimes90DaysLate,
+         Numedepencubed = NumberOfDependents^3,
+         LogRUUL = log(RevolvingUtilizationOfUnsecuredLines+1),
+         LogMI = log(MonthlyIncome+1),
+         LoansAge = (NumberOfOpenCreditLinesAndLoans + NumberRealEstateLoansOrLines)/age,
+         DepAge = NumberOfDependents/age,
+         LoansIncome = NumberOfOpenCreditLinesAndLoans + NumberRealEstateLoansOrLines,
+         RUULIncome = log((RevolvingUtilizationOfUnsecuredLines+1)/(MonthlyIncome+1)), #Housing Insolvency paper
+         HousingExpenses = log((1+NumberRealEstateLoansOrLines)/(MonthlyIncome+1)),
+         AgeCubed = age^3,
+         LogAge = log(age)
+)
+
+write_csv(cs_test_winsorized, "cs_test_clean.csv")
+
+#load back test data
+cs_test_clean <- read_csv("cs_test_clean.csv")
+```
+
+\par 
+Banks play a crucial role in market economies. They decide who can get finance and on what terms and can make or break investment decisions. For markets and society to function, individuals and companies need access to credit. 
+\par 
+Credit scoring algorithms, which make a guess at the probability of default, are the method banks use to determine whether or not a loan should be granted. Through this project, we attempt to improve on the state of the art in credit scoring, by predicting the probability that somebody will experience financial distress in the next two years.
+\par 
+We begin by exploring the data provided to us:
+\par 
+
+\section{Section 1: Descriptive Stats }
+
+\includegraphics[width = 10 cm]{/Users/lathanliou/Desktop/abc.png}
+
+```{r}
+aggr_plot <- aggr(cs_training, col=c('dodgerblue','black'), numbers=TRUE, sortVars=TRUE, labels=names(cs_training), cex.axis=.4, gap=0.5, ylab=c("Histogram of missing data","Pattern"))
+```
+\par 
+We noticed that the only variables with missing values were median income and number of dependents. 
+\par 
+
+\section{Section 2: Imputation }
+```{r}
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=20), tidy=TRUE)
+## Imputing Number of Dependents using Median Approach
+median.numdep <- median(cs_training$NumberOfDependents, na.rm = TRUE)
+for(i in 1:length(cs_training$NumberOfDependents)){
+  if(is.na(cs_training$NumberOfDependents[i])){
+    cs_training$NumberOfDependents[i] = median.numdep
+  }
+}
+
+
+## Imputing Monthly Income using Regression Approach
+train1 <- cs_training
+train1 <- train1 %>% drop_na()
+train.y <- train1$MonthlyIncome
+train1 <- subset(train1, select = -c(MonthlyIncome, SeriousDlqin2yrs))
+
+fit <- lm(train.y ~., data=train1)
+pred.miss <- fit$coefficients[1] + fit$coefficients[2]*cs_training$RevolvingUtilizationOfUnsecuredLines + fit$coefficients[3]*cs_training$age +
+              fit$coefficients[4]*cs_training$`NumberOfTime30-59DaysPastDueNotWorse` + fit$coefficients[5]*cs_training$DebtRatio +
+              fit$coefficients[6]*cs_training$NumberOfOpenCreditLinesAndLoans + fit$coefficients[7]*cs_training$NumberOfTimes90DaysLate +
+              fit$coefficients[8]*cs_training$NumberOfOpenCreditLinesAndLoans + fit$coefficients[9]*cs_training$`NumberOfTime60-89DaysPastDueNotWorse` +
+              fit$coefficients[10]*cs_training$NumberOfDependents
+
+median.MI <- median(cs_training$MonthlyIncome, na.rm = TRUE)
+
+for(i in 1:length(cs_training$MonthlyIncome)){
+  if(is.na(cs_training$MonthlyIncome[i])){
+    cs_training$MonthlyIncome[i] = pred.miss[i]
+  }
+  if(cs_training$MonthlyIncome[i] < 0){
+    cs_training$MonthlyIncome[i] <- median.MI
+  }
+}
+
+
+```
+\par 
+For age, we opted to use median imputation. The variable is categorical in nature. We used the median rather than mean for the imputed value so that the value will be an element of the sample. Furthermore, this approach is robust to the presence of extreme values.
+\par
+For monthly income we opted to use a regression approach for imputation. We believed the other variables can be used as predictors for monthly income, so we regressed all other explanatory variables on monthly income and used the predicted values for imputation. If the regression returned a negative value for the income, we set that value of the income to the median.
+\par 
+
+\section{Section 3: Outlier Treatment}
+```{r}
+## Winsorize Data 
+cs_training_winsorized <- sapply(cs_training, Winsorize, minval = NULL)
+cs_training_winsorized <- as.data.frame(cs_training_winsorized)
+```
+\par 
+In the data set provided, we see there exist outliers in almost all the variables. We must use a procedure to deal with these extreme values in order to improve the predictive power of our model and prevent the predictions from being biased. We opt to use the procedure of Winsorization, which is the process of replacing a specified number of extreme values with a smaller data value. This procedure began as a way to ensure the robustness of the sample mean, which is sensitive to the presence of extreme values, by construction. 
+\par 
+This procedure is useful as it helps us ensure that sample statistics such as the mean and standard deviation are robust to the presence of extreme values. Furthermore, the Winsorization process is computationally inexpensive and can be implemented easily. 
+\par 
+
+\section{Section 4: Feature Engineering }
+```{r, message=FALSE}
+## Creating New Features 
+
+cs_training_winsorized <- cs_training_winsorized %>%
+  mutate(Distributedincome = MonthlyIncome/(1+NumberOfDependents),
+         Totalcost = DebtRatio * MonthlyIncome,
+         Retired = ifelse(age > 65, 1, 0),
+         Lateindex = `NumberOfTime30-59DaysPastDueNotWorse` + 2*`NumberOfTime60-89DaysPastDueNotWorse` + 3*NumberOfTimes90DaysLate,
+         Numedepencubed = NumberOfDependents^3,
+         LogRUUL = log(RevolvingUtilizationOfUnsecuredLines+1),
+         LogMI = log(MonthlyIncome+1),
+         LoansAge = (NumberOfOpenCreditLinesAndLoans + NumberRealEstateLoansOrLines)/age,
+         DepAge = NumberOfDependents/age,
+         LoansIncome = NumberOfOpenCreditLinesAndLoans + NumberRealEstateLoansOrLines,
+         RUULIncome = log((RevolvingUtilizationOfUnsecuredLines+1)/(MonthlyIncome+1)), #Housing Insolvency paper
+         HousingExpenses = log((1+NumberRealEstateLoansOrLines)/(MonthlyIncome+1)),
+         AgeCubed = age^3,
+         LogAge = log(age)
+)
+
+write_csv(cs_training_winsorized, "cs_training_clean.csv")
+cs_training_clean <- read_csv("cs_training_clean.csv")
+
+```
+\par 
+Feature engineering is the process of transforming and combining X variables in order to create new features that will better represent the underlying problem for your model. This can be done in a variety of ways, both manual and automatic. 
+\par
+In class, we learned how adding basis functions could improve the way we understand our data: namely finding our decision rules in higher dimensions. Thus, feature engineering is a crucial part of the machine learning process. By transforming our data into features that we think better represent the underlying problem for our machine learning models, we hope to improve predictive performance. We tried to use our domain knowledge about credit scores and our creativity to come up with new features. We ultimately came up with 14 new features in addition to the existing 10 explanatory ones in the data set. 
+\par 
+For our project, we began by reading related literature and looking for factors that economists consider important in predicting whether an individual will default on their loan. It was not always easy to relate suggestions from the literature to the data we had available. One example of an engineered feature that was based on suggestions from the literature is "RUULIncome," the revolving utilization of unsecured lines divided by monthly income. This was loosely based on a suggestion from Devaney & Lyton (1995) that the ratio of expenditures to net income is useful for predicting household insolvency. 
+\par 
+In addition to features based on literature, we used intuition to develop our own features. One example is the LateIndex which sums all late payments, weighting the violation based on how late the payment was.
+\par 
+
+\section{Section 5: Predictive Algorithms }
+\subsection{RandomForest}
+```{r, eval = FALSE}
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=20), tidy=TRUE)
+## RandomForest
+cs_training_rf <- cs_training_clean[,-c(1:2)]
+
+output.forest<- randomForest(as.factor(cs_training_clean$SeriousDlqin2yrs) ~ cs_training_clean$RevolvingUtilizationOfUnsecuredLines+ cs_training_clean$age+ cs_training_clean$`NumberOfTime30-59DaysPastDueNotWorse`+ cs_training_clean$DebtRatio + cs_training_clean$MonthlyIncome + cs_training_clean$NumberOfOpenCreditLinesAndLoans + cs_training_clean$NumberOfTimes90DaysLate + cs_training_clean$NumberRealEstateLoansOrLines + cs_training_clean$`NumberOfTime60-89DaysPastDueNotWorse` + cs_training_clean$NumberOfDependents + cs_training_clean$Distributedincome + cs_training_clean$Totalcost + cs_training_clean$Retired + cs_training_clean$Lateindex + cs_training_clean$Numedepencubed + cs_training_clean$LogRUUL + cs_training_clean$LogMI + cs_training_clean$LoansAge +cs_training_clean$DepAge + cs_training_clean$LoansIncome + cs_training_clean$RUULIncome + cs_training_clean$HousingExpenses + cs_training_clean$AgeCubed + cs_training_clean$LogAge , 
+                             data=cs_training_rf, ntree=100, importance=T, replace=T, xtest = cs_test_clean[,-c(1:2)])
+
+y.test <- output.forest$test
+```
+
+\subsection{XGBoost}
+
+```{r}
+## xgboost
+
+#convert data frame to matrix
+cs_xgboost <- cs_training_clean[,-c(1:2)]
+cs_xgboost <- as.matrix(cs_xgboost)
+
+cs_test_clean <- as.matrix(cs_test_clean[,-c(1:2)])
+
+creditboost <- xgboost(data = cs_xgboost, max.depth = 5, label = as.matrix(cs_training_clean[,2]),
+               eta = 0.1, nthread = 2, nround = 2, objective = "binary:logistic")
+
+pred <- predict(creditboost, cs_test_clean)
+
+#visualizing most important features
+importance_mat <- xgb.importance(feature_names = colnames(cs_xgboost),model = creditboost)
+xgb.ggplot.importance (importance_matrix = importance_mat, xlab = "Relative Importance") + ggtitle("Most Important Explanatory Variables")
+```
+
+\par
+XGBoost is a widely-used learner in Kaggle competitions both because of its efficiency and efficacy. In 2015, 17 of 29 challenge-winning solutions employed some form of XGBoost (Chen & Guestrin 2016). 
+One of the key themes of the course has been the problem of overfitting. XGBoost deals with it using three methods. First, it uses regularization penalties which are based on the complexity of the model. Second, XGBoost scales new trees by some factor to reduce their influence. That scaling parameter functions both as a learning speed (i.e., high values for the parameter mean the model will run fewer iterations) and as a way to increase the generalizability of the model (Friedman 2002). Finally, XGBoost uses feature subsampling. The various trees are only given subsets of the feature space to try to predict the output. This method is similar to RandomForest, which we talked about in class (Breiman 2001).
+\par
+
+\par
+Another unique aspect of XGBoost is that it is capable of running on sparse data (i.e., data with missing values), which is useful for real-world applications. It also handles them in a unified way, such that the user does not need to specially prepare the data other than to note that there are missing values. The core of the method is to look at features that contain missing values and to create a default rule for categorizing all missing values based on information we have. Because XGBoost uses trees, each classification is a binary choice: left or right. XGBoost classifies the rows without missing values if they were to go left and calculates the gain function, then it classifies those same rows if they were to go to the right and calculates that gain function. Comparing the maximum of the gain functions tells XGBoost what should be the default direction to move in whenever the data are missing, thus allowing it to handle any sparse matrix with a single method (Chen & Guestrin 2016, $*4-5$; see also $*5$ algorithm 3).
+\par
+
+\section{Section 6: Results }
+
+\par
+Relative importance is a reflection of how often an explanatory feature was used to make a decision in a tree. LateIndex, our engineered feature of the weighted sum of the number of times late per time period, is the most important feature. The clusters group variables based on their degree of importance.
+
+\par
+Ultimately, we tried a couple different things. XGBoost has a built-in imputation argument, but when we tried it, we got a lower AUC, which means that we must be doing something good with our imputation method. When we didn’t include our engineered features, our AUC was not as high as the model with our engineered features, which ended up having an AUC of 0.854553, which makes sense since our most important predictor was LateIndex, an engineered feature.
+\par
+
+```{r, echo = FALSE}
+model <- c("RandomForest", "XGBoost with sparse matrix", "XGBoost with our imputation, no feature engineering", "XGBoost with our imputation and feature engineering")
+aucs <- c(0.838240,0.775243,0.846916,0.854553)
+summary.matrix <- data.frame(Model = model, AUC = aucs)
+knitr::kable(summary.matrix)
+
+```
+
